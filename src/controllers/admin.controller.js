@@ -3,29 +3,119 @@ const bcrypt=require('bcrypt')
 
 const medicosActivos = async (req, res) => {
   try {
-    const { data, error } = await supabase.rpc('get_medicos_activos');
-    if (error) throw error;
-    return res.status(200).json(data);
+    // 1. Hacemos la consulta a Supabase
+    const { data, error } = await supabase
+      .from('medico')
+      .select(`
+        id_medico,
+        matricula_profesional,
+        departamento,
+        carnet_profesional,
+        usuario!inner (
+          nombre_completo,
+          fecha_nac,
+          teléfono,
+          correo,
+          estado
+        ),
+        administrador!inner (
+          usuario!inner (
+            nombre_completo
+          )
+        )
+      `)
+      .eq('usuario.estado', true); // 👈 Filtramos por los que ya están activos/admitidos
+
+    if (error) {
+      console.error('Error obteniendo médicos activos:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    // 2. Mapeamos la data para que devuelva el mismo JSON plano que tu Angular espera
+    const medicosFormateados = data.map((m) => {
+      return {
+        id: m.id_medico,
+        nombre: m.usuario.nombre_completo,
+        fechaNac: m.usuario.fecha_nac,
+        telefono: m.usuario.teléfono,
+        correo: m.usuario.correo,
+        matricula: m.matricula_profesional,
+        departamento: m.departamento,
+        carnet: m.carnet_profesional,
+        // Al usar !inner arriba aseguramos que esto existe, pero el ? previene caídas por si acaso
+        admitidoPor: m.administrador?.usuario?.nombre_completo || null 
+      };
+    });
+
+    // 3. Devolvemos la respuesta
+    return res.status(200).json(medicosFormateados);
+
   } catch (err) {
-    console.error('Error interno:', err);
+    console.error('Error interno en medicosActivos:', err);
     return res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 const medicosSolicitantes = async (req, res) => {
   try {
-    const { data, error } = await supabase.rpc('get_medicos_solicitantes');
+    // 1. Hacemos la consulta a Supabase emulando los JOINs
+    const { data, error } = await supabase
+      .from('medico')
+      .select(`
+        id_medico,
+        matricula_profesional,
+        departamento,
+        carnet_profesional,
+        usuario!inner (
+          nombre_completo,
+          fecha_nac,
+          teléfono,
+          correo,
+          estado
+        ),
+        administrador (
+          usuario (
+            nombre_completo
+          )
+        )
+      `)
+      .eq('usuario.estado', false); // 👈 Filtramos por los no admitidos
+
     if (error) {
-      console.error('Error ejecutando función:', error);
+      console.error('Error obteniendo médicos solicitantes:', error);
       return res.status(500).json({ error: error.message });
     }
-    return res.status(200).json(data);
-  } catch (err) {
-    console.error('Error interno:', err);
-    return res.status(500).json({ error: 'Error del servidor' });
-  } 
-};
 
+    // 2. Supabase devuelve objetos anidados. Los mapeamos (aplanamos)
+    // para que queden exactamente igual a como los devolvía la función SQL.
+    const medicosFormateados = data.map((m) => {
+      
+      // Manejamos el caso de que el administrador sea null (equivalente al LEFT JOIN)
+      let nombreAdmin = null;
+      if (m.administrador && m.administrador.usuario) {
+        nombreAdmin = m.administrador.usuario.nombre_completo;
+      }
+
+      return {
+        id: m.id_medico,
+        nombre: m.usuario.nombre_completo,
+        fechaNac: m.usuario.fecha_nac,
+        telefono: m.usuario.teléfono,
+        correo: m.usuario.correo,
+        matricula: m.matricula_profesional,
+        departamento: m.departamento,
+        carnet: m.carnet_profesional,
+        admitidoPor: nombreAdmin
+      };
+    });
+
+    // 3. Devolvemos el arreglo JSON formateado
+    return res.status(200).json(medicosFormateados);
+
+  } catch (err) {
+    console.error('Error interno en medicosSolicitantes:', err);
+    return res.status(500).json({ error: 'Error del servidor' });
+  }
+};
 const activarMedico = async (req, res) => {
   const idMedico = req.params.idMedico;
   const { idAdmin } = req.body;

@@ -1,5 +1,28 @@
 const supabase = require('../../database'); // tu cliente Supabase
-const bcrypt=require('bcrypt')
+const bcrypt = require('bcrypt');
+const crypto = require('crypto'); // --- NUEVO --- Necesario para generar el código aleatorio
+
+// --- NUEVO --- Función para generar el código de usuario estándar
+function generarCodigoEstandar(rolUsuario) {
+    const sistema = 'GLC';
+    
+    // Asignar el prefijo de rol (Como este controlador es registrarPaciente, casi siempre será PAC, pero lo dejamos dinámico por seguridad)
+    let rolPrefix = 'USR';
+    if (rolUsuario === 'Paciente' || rolUsuario === 'paciente') rolPrefix = 'PAC';
+    if (rolUsuario === 'Médico' || rolUsuario === 'medico') rolPrefix = 'MED';
+    if (rolUsuario === 'Administrador' || rolUsuario === 'administrador') rolPrefix = 'ADM';
+
+    // Obtener Fecha actual en formato AAMM
+    const hoy = new Date();
+    const año = String(hoy.getFullYear()).slice(-2);
+    const mes = String(hoy.getMonth() + 1).padStart(2, '0');
+    const fechaAAMM = `${año}${mes}`;
+
+    // Generar string aleatorio seguro de 6 caracteres
+    const aleatorio = crypto.randomBytes(3).toString('hex').toUpperCase();
+
+    return `${sistema}-${rolPrefix}-${fechaAAMM}-${aleatorio}`;
+}
 
 const registrarPaciente = async (req, res) => {
   try {
@@ -62,10 +85,14 @@ const registrarPaciente = async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(contrasena, saltRounds);
 
+    // --- NUEVO --- Generar el código de usuario basado en el rol recibido
+    const codigoGenerado = generarCodigoEstandar(rol);
+
     // Insert usuario
     const { data: usuarioInsertadoData, error: usuarioInsertadoError } = await supabase
       .from("usuario")
       .insert([{
+        codigo_usuario: codigoGenerado, // --- NUEVO --- Añadido al payload de Supabase
         nombre_completo,
         correo,
         contrasena: hashedPassword,
@@ -139,6 +166,8 @@ const registrarPaciente = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+module.exports = { registrarPaciente };
 
 const perfilPaciente=async (req, res) => {
   const idPaciente = parseInt(req.params.idPaciente);

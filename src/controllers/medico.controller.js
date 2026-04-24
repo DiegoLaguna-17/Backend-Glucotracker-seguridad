@@ -1,6 +1,31 @@
 const supabase = require('../../database'); // tu cliente Supabase
 const bcrypt = require('bcrypt');
 
+function generarCodigoEstandar(rolUsuario) {
+    const sistema = 'GLC';
+    
+    // Asignar el prefijo de rol
+    let rolPrefix = 'USR';
+    if (rolUsuario === 'Paciente' || rolUsuario === 'paciente') rolPrefix = 'PAC';
+    if (rolUsuario === 'Médico' || rolUsuario === 'medico') rolPrefix = 'MED';
+    if (rolUsuario === 'Administrador' || rolUsuario === 'administrador') rolPrefix = 'ADM';
+
+    // Obtener Fecha actual en formato AAMM
+    const hoy = new Date();
+    const año = String(hoy.getFullYear()).slice(-2);
+    const mes = String(hoy.getMonth() + 1).padStart(2, '0');
+    const fechaAAMM = `${año}${mes}`;
+
+    // --- CORRECCIÓN AQUÍ: Generar string aleatorio seguro de 6 caracteres con JS nativo ---
+    const caracteres = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let aleatorio = '';
+    for (let i = 0; i < 6; i++) {
+        aleatorio += caracteres.charAt(Math.floor(Math.random() * caracteres.length));
+    }
+
+    return `${sistema}-${rolPrefix}-${fechaAAMM}-${aleatorio}`;
+}
+
 const registrarMedico = async (req, res) => {
   try {
     const { nombre_completo, correo, contrasena, telefono, fecha_nac, id_especialidad, departamento } = req.body;
@@ -38,10 +63,14 @@ const registrarMedico = async (req, res) => {
     const hashed_contrasena = await bcrypt.hash(contrasena, 10);
     const rol = 'medico';
 
+    // --- NUEVO --- Generar el código de usuario estándar
+    const codigoGenerado = generarCodigoEstandar(rol);
+
     // 4️⃣ Insertar usuario
     const { data: usuarioData, error: usuarioError } = await supabase
       .from("usuario")
       .insert([{
+        codigo_usuario: codigoGenerado, // --- NUEVO --- Añadido al payload
         nombre_completo,
         correo,
         contrasena: hashed_contrasena,
@@ -63,7 +92,6 @@ const registrarMedico = async (req, res) => {
         matricula_profesional: pdfUrl,
         departamento,
         carnet_profesional: imgUrl,
-        administrador_id_admin: 1
       }])
       .select();
 
@@ -78,7 +106,6 @@ const registrarMedico = async (req, res) => {
 };
 
 module.exports = { registrarMedico };
-
 
 
 

@@ -91,6 +91,23 @@ app.use(cors({
 //         rol: rol
 //     });
 // });
+
+
+
+const guardarLogSeguridad = async (logData) => {
+  try {
+    const { error } = await supabase
+      .from('logs_seguridad')
+      .insert([logData]);
+
+    if (error) throw error;
+  } catch (err) {
+    console.error("💥 Error guardando log de seguridad:", err.message);
+  }
+};
+
+
+
 const auditoriaEndpoint = require('./src/middlewares/auditoria.login');
 
 const cookieParser = require('cookie-parser');
@@ -110,37 +127,64 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
   const { correo, contrasena } = req.body;
   const MENSAJE_ERROR_AUTH = 'Correo o contraseña incorrectos';
 
-  // 1️⃣ Validación preventiva: Evita caídas si envían body vacío (Rama HEAD)
+  // 1️⃣ Validación preventiva
   if (!correo || !contrasena) {
     return response(res, 'error', 400, 'El correo y la contraseña son obligatorios');
   }
 
   try {
-    // 2️⃣ Buscar usuario incluyendo TODOS los campos necesarios de ambas ramas
+    // 2️⃣ Buscar usuario
     const { data: usuarioData, error: usuarioError } = await supabase
       .from("usuario")
       .select("id_usuario, correo, contrasena, rol, estado, intentos_fallidos, bloqueado_hasta, fecha_cambio_contrasena")
       .eq("correo", correo)
       .single();
 
-    // Si Supabase no encuentra el correo, devuelve PGRST116
+    // 🔴 LOG: Si el correo no existe en la BD
     if ((usuarioError && usuarioError.code === 'PGRST116') || !usuarioData) {
       console.log(`[LOGIN FALLIDO] Correo inexistente: ${correo}`);
+      
+      await guardarLogSeguridad({
+        id_usuario: null, // No sabemos quién es
+        evento: 'LOGIN_FALLIDO',
+        descripcion: 'Intento de login con correo inexistente',
+        email_intento: correo,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
+
       return response(res, 'error', 401, MENSAJE_ERROR_AUTH);
     }
 
-    // Cualquier otro error de base de datos
     if (usuarioError) throw usuarioError;
-
     const usuario = usuarioData;
 
-    // 3️⃣ Verificar si la cuenta está inactiva o bloqueada (Rama HEAD + Seguridad)
+    // 3️⃣ Verificar si la cuenta está inactiva o bloqueada
     if (usuario.estado === false) {
+      let descripcionInactividad = 'Intento de login en cuenta inactiva';
+      
       if (usuario.intentos_fallidos >= 3) {
+        descripcionInactividad = 'Intento de login rechazado: cuenta bloqueada por múltiples intentos fallidos.';
         console.log(`[LOGIN RECHAZADO] Cuenta bloqueada por intentos: ${correo}`);
+      } else {
+        console.log(`[LOGIN RECHAZADO] Cuenta inactiva: ${correo}`);
+      }
+
+      // 🔴 LOG: Intento de acceso a cuenta bloqueada/inactiva
+      await guardarLogSeguridad({
+        id_usuario: usuario.id_usuario,
+        evento: 'LOGIN_FALLIDO',
+        descripcion: descripcionInactividad,
+        email_intento: correo,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
+
+      if (usuario.intentos_fallidos >= 3) {
         return response(res, 'error', 403, 'Cuenta bloqueada por múltiples intentos fallidos.', { code: 'UNLOCK_REQUIRED', id_usuario: usuario.id_usuario });
       }
-      console.log(`[LOGIN RECHAZADO] Cuenta inactiva: ${correo}`);
       return response(res, 'error', 403, 'Tu cuenta está inactiva. Por favor contacta a soporte.');
     }
 
@@ -148,20 +192,36 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
     const isMatch = await bcrypt.compare(String(contrasena), usuario.contrasena);
 
     if (!isMatch) {
-      // 🔸 Lógica de seguridad: Incrementar intentos fallidos
+      // 🔸 Incrementar intentos fallidos
       const nuevosIntentos = (usuario.intentos_fallidos || 0) + 1;
       let updateData = { intentos_fallidos: nuevosIntentos };
+      
+      let tipoEvento = 'LOGIN_FALLIDO';
+      let descripcionEvento = `Contraseña incorrecta. Intento ${nuevosIntentos}/3.`;
 
       if (nuevosIntentos >= 3) {
-        // Bloquear cuenta (suspender usuario)
         updateData.estado = false;
-        // Opcional: mantener bloqueado_hasta si se quiere, pero estado: false ya bloquea
         const fechaDesbloqueo = new Date();
-        fechaDesbloqueo.setFullYear(fechaDesbloqueo.getFullYear() + 100);
+        // FIX: Sumar realmente los 100 años
+        fechaDesbloqueo.setFullYear(fechaDesbloqueo.getFullYear() + 100); 
         updateData.bloqueado_hasta = fechaDesbloqueo.toISOString();
+
+        tipoEvento = 'CUENTA_BLOQUEADA';
+        descripcionEvento = 'Cuenta bloqueada automáticamente por exceder límite de intentos fallidos (3).';
       }
 
       await supabase.from("usuario").update(updateData).eq("id_usuario", usuario.id_usuario);
+
+      // 🔴 LOG: Contraseña incorrecta o Bloqueo de cuenta
+      await guardarLogSeguridad({
+        id_usuario: usuario.id_usuario,
+        evento: tipoEvento,
+        descripcion: descripcionEvento,
+        email_intento: correo,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
 
       const mensaje = nuevosIntentos >= 3
         ? 'Cuenta bloqueada por múltiples intentos fallidos.'
@@ -170,19 +230,19 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       console.log(`[LOGIN FALLIDO] Intento ${nuevosIntentos} fallido para: ${correo}`);
       
       if (nuevosIntentos === 3) {
-        return response(res, 'error', 401, mensaje, { code: 'ACCOUNT_BLOCKED_NOW' });
+        return response(res, 'error', 401, mensaje, { code: 'CUENTA_BLOQUEADA' });
       }
       return response(res, 'error', 401, mensaje);
     }
 
     // --- HASTA AQUÍ LAS CREDENCIALES SON 100% CORRECTAS ---
 
-    // 6️⃣ Reiniciar intentos fallidos tras éxito (Rama Seguridad)
+    // 6️⃣ Reiniciar intentos fallidos tras éxito
     if (usuario.intentos_fallidos > 0) {
       await supabase.from("usuario").update({ intentos_fallidos: 0, bloqueado_hasta: null }).eq("id_usuario", usuario.id_usuario);
     }
 
-    // Verificar vigencia (3 meses) usando historial_contrasena
+    // Verificar vigencia (3 meses)
     const { data: historialData } = await supabase
       .from('historial_contrasena')
       .select('created_at')
@@ -208,7 +268,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       }
     }
 
-    // 8️⃣ Buscar Rol del Usuario (Soporta rol 'soporte' de la Rama HEAD)
+    // 8️⃣ Buscar Rol del Usuario
     const rolMap = {
       administrador: 'id_admin',
       soporte: 'id_admin',
@@ -218,7 +278,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
 
     let tablaRol = usuario.rol;
     if (tablaRol === "soporte") {
-      tablaRol = "administrador"; // Los soportes se guardan en la tabla administrador
+      tablaRol = "administrador"; 
     }
 
     const columnaIdRol = rolMap[usuario.rol];
@@ -236,8 +296,8 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
     const id_rol = rolData[columnaIdRol];
 
     // 9️⃣ Generar y enviar OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6 dígitos
-    setOTP(usuario.id_usuario, otp, 5 * 60 * 1000); // 5 minutos
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    setOTP(usuario.id_usuario, otp, 5 * 60 * 1000); 
 
     const { subject, html } = getOtpTemplate({
       nombreUsuario: usuario.correo,
@@ -246,6 +306,17 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
 
     await sendEmail(usuario.correo, subject, html);
     console.log(`[LOGIN EXITOSO] OTP enviado a: ${correo}`);
+
+    // 🟢 LOG: Credenciales correctas y OTP enviado
+    await guardarLogSeguridad({
+      id_usuario: usuario.id_usuario,
+      evento: 'LOGIN_CREDENCIALES_VALIDAS',
+      descripcion: 'Credenciales validadas correctamente. Esperando validación OTP.',
+      email_intento: correo,
+      ip_origen: req.ip,
+      user_agent: req.headers['user-agent'],
+      exito: true
+    });
 
     // 🔟 Respuesta final estandarizada
     return response(res, 'success', 200, 'Credenciales correctas. OTP enviado al correo.', {
@@ -265,22 +336,44 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
   const { id_usuario } = req.params;
   const { contrasena } = req.body;
 
-  // 1️⃣ Validar robustez de la contraseña
-  const validacion = esContrasenaRobusta(contrasena);
-  if (!validacion.valida) {
-    return response(res, 'error', 400, validacion.mensaje);
-  }
-
   try {
-    // 2️⃣ Obtener datos del usuario actual
+    // 1️⃣ Obtener datos del usuario actual PRIMERO
     const { data: usuario, error: userError } = await supabase
       .from('usuario')
-      .select('contrasena')
+      .select('correo, contrasena')
       .eq('id_usuario', id_usuario)
       .single();
 
     if (userError || !usuario) {
+      // 🔴 LOG: Usuario no encontrado
+      await guardarLogSeguridad({
+        id_usuario: id_usuario || null,
+        evento: 'CAMBIO_CONTRASENA_FALLIDO',
+        descripcion: 'Intento de cambio de contraseña para usuario inexistente.',
+        email_intento: null,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
       return response(res, 'error', 404, 'Usuario no encontrado en el sistema.');
+    }
+
+    const correo = usuario.correo;
+
+    // 2️⃣ Validar robustez de la contraseña
+    const validacion = esContrasenaRobusta(contrasena);
+    if (!validacion.valida) {
+      // 🔴 LOG: Fallo por política de contraseña
+      await guardarLogSeguridad({
+        id_usuario: id_usuario,
+        evento: 'CAMBIO_CONTRASENA_FALLIDO',
+        descripcion: `Cambio rechazado por política de seguridad: ${validacion.mensaje}`,
+        email_intento: correo,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
+      return response(res, 'error', 400, validacion.mensaje);
     }
 
     // 3️⃣ Revisar historial de contraseñas
@@ -291,7 +384,6 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
 
     let hashUsado = false;
 
-    // Comparar con el historial
     if (historial && historial.length > 0) {
       for (let rec of historial) {
         if (await bcrypt.compare(String(contrasena), rec.contrasena_hash)) {
@@ -301,12 +393,21 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
       }
     }
 
-    // Comparar con la contraseña actual
     if (!hashUsado) {
       hashUsado = await bcrypt.compare(String(contrasena), usuario.contrasena);
     }
 
     if (hashUsado) {
+      // 🔴 LOG: Fallo por reutilización de contraseña
+      await guardarLogSeguridad({
+        id_usuario: id_usuario,
+        evento: 'CAMBIO_CONTRASENA_FALLIDO',
+        descripcion: 'Cambio rechazado: la contraseña ya fue utilizada anteriormente.',
+        email_intento: correo,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
       return response(res, 'error', 400, 'La contraseña no puede ser igual a una utilizada anteriormente.');
     }
 
@@ -320,7 +421,7 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
       contrasena_hash: hashedPassword
     });
 
-    // 6️⃣ Actualizar usuario (desbloquear cuenta y reiniciar intentos)
+    // 6️⃣ Actualizar usuario
     const { data, error } = await supabase
       .from('usuario')
       .update({
@@ -334,29 +435,46 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
 
     if (error) throw error;
 
+    // 🟢 LOG: Cambio de contraseña exitoso
+    await guardarLogSeguridad({
+      id_usuario: id_usuario,
+      evento: 'CAMBIO_CONTRASENA_EXITOSO',
+      descripcion: 'Contraseña actualizada correctamente desde el perfil. Se restablecieron los intentos fallidos si los hubiera.',
+      email_intento: correo,
+      ip_origen: req.ip,
+      user_agent: req.headers['user-agent'],
+      exito: true
+    });
+
     return response(res, 'success', 200, 'Contraseña actualizada correctamente.', data[0]);
 
   } catch (err) {
     console.error('Error al actualizar contraseña:', err.message);
+    
+    // 🔴 LOG: Error interno del servidor
+    const correoError = typeof usuario !== 'undefined' && usuario ? usuario.correo : null;
+    await guardarLogSeguridad({
+      id_usuario: id_usuario || null,
+      evento: 'ERROR_CAMBIO_CONTRASENA',
+      descripcion: `Error interno al intentar actualizar la contraseña: ${err.message}`,
+      email_intento: correoError,
+      ip_origen: req.ip,
+      user_agent: req.headers['user-agent'],
+      exito: false
+    });
+
     return response(res, 'error', 500, 'Error interno del servidor al actualizar la contraseña.');
   }
 });
+
+
 const { getOTP, deleteOTP } = require('./otpCache');
 const { generateToken } = require('./src/utils/auth');
 app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
   const { id_usuario, codigo } = req.body;
 
   try {
-    // 1️⃣ Validar OTP
-    const cachedOTP = getOTP(id_usuario);
-
-    if (!cachedOTP || cachedOTP !== codigo) {
-      return response(res, 'error', 401, 'Código incorrecto o expirado');
-    }
-
-    deleteOTP(id_usuario);
-
-    // 2️⃣ Obtener usuario
+    // 1️⃣ Obtener usuario PRIMERO (para tener su correo disponible para los logs)
     const { data: usuario, error: usuarioError } = await supabase
       .from("usuario")
       .select("id_usuario, correo, rol")
@@ -364,14 +482,36 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
       .single();
 
     if (usuarioError || !usuario) {
+      // Si mandan un ID falso que ni existe
       return response(res, 'error', 404, 'Usuario no encontrado en el sistema');
     }
 
+    // 2️⃣ Validar OTP
+    const cachedOTP = getOTP(id_usuario);
+
+    if (!cachedOTP || cachedOTP !== codigo) {
+      // 🔴 LOG: Intento fallido de OTP (¡Ahora sí guardamos el correo!)
+      await guardarLogSeguridad({
+        id_usuario: usuario.id_usuario,
+        evento: 'OTP_FALLIDO',
+        descripcion: 'Código OTP incorrecto o expirado.',
+        email_intento: usuario.correo, // 👈 Se registra el correo correctamente
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
+
+      return response(res, 'error', 401, 'Código incorrecto o expirado');
+    }
+
+    deleteOTP(id_usuario);
+
+    // 3️⃣ Normalizar rol base
     if (usuario.rol == "soporte") {
       usuario.rol = "administrador";
     }
 
-    // 3️⃣ Configuración por rol
+    // 4️⃣ Configuración por rol
     const rolMap = {
       administrador: { tabla: "administrador", campos: ["id_admin", "cargo"] },
       medico: { tabla: "medico", campos: ["id_medico"] },
@@ -384,7 +524,7 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
       return response(res, 'error', 400, 'Rol de usuario inválido o no reconocido');
     }
 
-    // 4️⃣ Obtener datos específicos del rol
+    // 5️⃣ Obtener datos específicos del rol
     const { data: rolData, error: rolError } = await supabase
       .from(config.tabla)
       .select(config.campos.join(", "))
@@ -395,7 +535,7 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
       return response(res, 'error', 404, 'Información del perfil no encontrada');
     }
 
-    // 5️⃣ Normalizar id_rol y cargo
+    // 6️⃣ Extraer id_rol y cargo
     let id_rol;
     let cargo = null;
 
@@ -408,19 +548,20 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
       id_rol = rolData.id_paciente;
     }
 
-    // 6️⃣ Permisos (solo admin por ahora)
-    let permisos = [];
-
-    if (usuario.rol === "administrador") {
-      const { data: permisosData } = await supabase
-        .from("admin_permiso")
-        .select("permiso(nombre)")
-        .eq("id_admin", id_rol);
-
-      permisos = permisosData?.map(p => p.permiso.nombre) || [];
-    }
-
-    // 7️⃣ Generar JWT Token
+    // 7️⃣ Obtener permisos
+    const { data: permisosData, error: errorPermisos } = await supabase
+      .from("rol_permiso")
+      .select(`
+        permiso!inner (
+          nombre
+        )
+      `)
+      .eq("id_rol", id_rol)
+      .eq("activo", true);
+      
+    const permisos = permisosData?.map(p => p.permiso.nombre) || [];
+    
+    // 8️⃣ Generar JWT Token
     const token = generateToken({
       id_usuario: usuario.id_usuario,
       correo: usuario.correo,
@@ -429,7 +570,7 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
       permisos
     });
 
-    // 8️⃣ Establecer Cookie de seguridad
+    // 9️⃣ Establecer Cookie de seguridad
     res.cookie('token', token, {
       httpOnly: true,
       secure: true,
@@ -437,7 +578,18 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
       maxAge: 5 * 60 * 60 * 1000 // 5 horas
     });
 
-    // 9️⃣ Respuesta final estandarizada
+    // 🟢 LOG: Autenticación completa exitosa
+    await guardarLogSeguridad({
+      id_usuario: usuario.id_usuario,
+      evento: 'LOGIN_EXITOSO',
+      descripcion: 'Autenticación en dos pasos (OTP) completada. Sesión iniciada.',
+      email_intento: usuario.correo, 
+      ip_origen: req.ip,
+      user_agent: req.headers['user-agent'],
+      exito: true
+    });
+
+    // 🔟 Respuesta final estandarizada
     return response(res, 'success', 200, 'Autenticación exitosa', {
       usuario: {
         id_usuario: usuario.id_usuario,
@@ -450,6 +602,21 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
 
   } catch (error) {
     console.error("Error en verify-otp:", error.message);
+    
+    // 🔴 LOG: Error de servidor (Aquí tampoco será null si falló después de consultar al usuario)
+    // Extraemos el correo con encadenamiento opcional por si el error ocurrió antes de consultar el usuario
+    const correoError = typeof usuario !== 'undefined' && usuario ? usuario.correo : null;
+
+    await guardarLogSeguridad({
+      id_usuario: id_usuario || null,
+      evento: 'OTP_ERROR',
+      descripcion: `Error interno al verificar OTP: ${error.message}`,
+      email_intento: correoError,
+      ip_origen: req.ip,
+      user_agent: req.headers['user-agent'],
+      exito: false
+    });
+
     return response(res, 'error', 500, 'Error interno del servidor durante la verificación', error.message);
   }
 });

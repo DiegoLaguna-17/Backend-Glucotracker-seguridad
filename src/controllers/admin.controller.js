@@ -1376,6 +1376,153 @@ const reactivarUsuario = async (req, res) => {
   }
 };
 
+const obtenerLogsAplicacion = async (req, res) => {
+  try {
+    // 1. Logs principales + JOIN con la tabla usuario
+    const { data: logs, error: errorLogs } = await supabase
+      .from('logs_aplicacion')
+      // Traemos todo de logs y solo el correo de la tabla usuario relacionada
+      .select('*, usuario(correo)') 
+      .order('fecha', { ascending: false });
+
+    if (errorLogs) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error obteniendo logs_aplicacion',
+        error: errorLogs.message
+      });
+    }
+
+    // 2. Detalles
+    const { data: detalles, error: errorDetalles } = await supabase
+      .from('logs_detalle')
+      .select('*');
+
+    if (errorDetalles) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error obteniendo logs_detalle',
+        error: errorDetalles.message
+      });
+    }
+
+    // 3. Agrupar detalles por log
+    const detallesPorLog = detalles.reduce((acc, d) => {
+      const idLog = d.id_log_aplicacion;
+
+      if (!acc[idLog]) acc[idLog] = [];
+
+      acc[idLog].push({
+        tipo: d.tipo,
+        campo: d.campo,
+        valor_anterior: d.valor_anterior,
+        valor_entrante: d.valor_entrante
+      });
+
+      return acc;
+    }, {});
+
+    // 4. Construir respuesta final
+    const resultado = logs.map(l => ({
+      id: l.id,
+      // 🛑 CAMBIO: Extraemos el correo del objeto anidado que nos da Supabase
+      // Si el id_usuario era null (por ejemplo, en un error de validación), dirá 'Sistema / No registrado'
+      correo: l.usuario?.correo || 'Sistema / No registrado',
+      modulo: l.modulo,
+      entidad: l.entidad,
+      accion: l.accion,
+      id_registro: l.id_registro,
+      descripcion: l.descripcion,
+      endpoint: l.endpoint,
+      metodo: l.metodo,
+      codigo_http: l.codigo_http,
+      ip_origen: l.ip_origen,
+      user_agent: l.user_agent,
+      fecha: l.fecha,
+      detalles: detallesPorLog[l.id] || []
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Logs de aplicación obtenidos correctamente',
+      total: resultado.length,
+      data: resultado
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+};
+
+
+const obtenerLogsSeguridad = async (req, res) => {
+  try {
+    // 1. Consultar logs_seguridad con JOIN a la tabla usuario
+    const { data: logs, error } = await supabase
+      .from('logs_seguridad')
+      // Traemos todos los campos del log, y de la tabla usuario traemos nombre y rol
+      .select('*, usuario(nombre_completo, rol)')
+      .order('fecha', { ascending: false }); // Los más recientes primero
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error en la base de datos al obtener los logs de seguridad.',
+        error: error.message
+      });
+    }
+
+    // 2. Mapear y limpiar los datos para el frontend
+    const resultado = logs.map(log => {
+      // Determinar el nombre del responsable (si no hay usuario, fue un usuario no identificado/anónimo)
+      const nombre_usuario = log.usuario 
+        ? log.usuario.nombre_completo 
+        : 'Usuario no registrado';
+
+      // Determinar el rol (si no hay usuario, lo marcamos como N/A)
+      const rol_usuario = log.usuario 
+        ? log.usuario.rol 
+        : 'N/A';
+
+      return {
+        id: log.id,
+        id_usuario: log.id_usuario,
+        nombre_usuario: nombre_usuario,
+        rol: rol_usuario,
+        email_intento: log.email_intento || 'No capturado',
+        evento: log.evento,
+        descripcion: log.descripcion,
+        ip_origen: log.ip_origen,
+        user_agent: log.user_agent,
+        exito: log.exito,
+        fecha: log.fecha
+      };
+    });
+
+    // 3. Respuesta estructurada (Idéntica al formato de logs de aplicación)
+    return res.status(200).json({
+      success: true,
+      message: 'Logs de seguridad obtenidos correctamente',
+      total: resultado.length,
+      data: resultado
+    });
+
+  } catch (error) {
+    console.error('Error interno al obtener logs de seguridad:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor.',
+      error: error.message
+    });
+  }
+};
+
+
 module.exports={medicosActivos,/*medicosSolicitantes,activarMedico,*/pacientesActivos, pacientesCompletos,/*pacientesSolicitantes,
   activarPaciente,*/perfilAdmin,agregarAdmin,obtenerAdmins, /*actualizarPermisosAdmins, */obtenerRoles,insertarRoles,
-   /*actualizarPermisosPacientes,*/obtenerRolesPermisos,actualizarMatrizRoles,obtenerSolicitudesPendientes,activarCuenta,suspenderUsuario,reactivarUsuario,medicosCompletos};
+   /*actualizarPermisosPacientes,*/obtenerRolesPermisos,actualizarMatrizRoles,obtenerSolicitudesPendientes,activarCuenta,
+   suspenderUsuario,reactivarUsuario,medicosCompletos, obtenerLogsAplicacion,obtenerLogsSeguridad};

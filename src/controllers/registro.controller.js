@@ -82,10 +82,37 @@ const datosParaGlucosa = async (req, res) => {
 const nodemailer = require("nodemailer");
 const { getHipoTemplate, getHiperTemplate } = require("../email/templates");
 
+const guardarLogCompleto = async (logApp, logDetalles = []) => {
+  try {
+    const { data: logInsertado, error: errorLog } = await supabase
+      .from("logs_aplicacion")
+      .insert([logApp])
+      .select()
+      .single();
+
+    if (errorLog) throw errorLog;
+
+    if (logDetalles.length > 0) {
+      const detalles = logDetalles.map(d => ({
+        ...d,
+        id_log_aplicacion: logInsertado.id
+      }));
+
+      const { error: errorDetalle } = await supabase
+        .from("logs_detalle")
+        .insert(detalles);
+
+      if (errorDetalle) throw errorDetalle;
+    }
+
+  } catch (err) {
+    console.error("Error guardando log:", err.message);
+  }
+};
+
 const registrarAlerta = async (req, res) => {
   const { id_tipo_alerta, id_registro, id_medico, fecha_alerta } = req.body;
 
-  // Validación básica estandarizada
   if (!id_tipo_alerta || !id_registro || !id_medico || !fecha_alerta) {
     return response(res, 'error', 400, 'Todos los campos son requeridos para registrar la alerta');
   }
@@ -108,6 +135,57 @@ const registrarAlerta = async (req, res) => {
 
     const alertaInsertada = data[0];
 
+    // 2️⃣ RESPONDER PRIMERO (CLAVE)
+    response(
+      res,
+      'success',
+      201,
+      'Alerta registrada y correo enviado correctamente al médico',
+      alertaInsertada
+    );
+
+    // ================= LOG ASINCRONO =================
+    setImmediate(() => {
+      const logApp = {
+        id_usuario: id_medico,
+        modulo: "alertas",
+        entidad: "alerta",
+        accion: "CREATE",
+        id_registro: alertaInsertada.id_registro,
+
+        descripcion:
+          id_tipo_alerta === 1
+            ? "Alerta de hipoglucemia generada"
+            : "Alerta de hiperglucemia generada",
+
+        endpoint: req.originalUrl,
+        metodo: req.method,
+        codigo_http: 201,
+
+        ip_origen: req.ip,
+        user_agent: req.headers["user-agent"],
+        fecha: new Date()
+      };
+
+      const logDetalles = [
+        {
+          tipo: "REFERENCIA",
+          campo: "id_tipo_alerta",
+          valor_entrante: id_tipo_alerta
+        },
+        {
+          tipo: "REFERENCIA",
+          campo: "id_registro",
+          valor_entrante: id_registro
+        }
+      ];
+
+      guardarLogCompleto(logApp, logDetalles);
+    });
+
+    // ================= PROCESO DE CORREO (también async si quieres optimizar más) =================
+    // ⚠️ OPCIONAL: también podrías mover TODO esto a setImmediate si quieres ultra performance
+
     // Obtener registro de glucosa
     const { data: registro } = await supabase
       .from("registro_glucosa")
@@ -117,41 +195,29 @@ const registrarAlerta = async (req, res) => {
 
     if (!registro) throw new Error("Registro de glucosa no encontrado");
 
-    // Obtener paciente
     const { data: paciente } = await supabase
       .from("paciente")
       .select("id_usuario, id_medico")
       .eq("id_paciente", registro.id_paciente)
       .single();
 
-    if (!paciente) throw new Error("Paciente no encontrado");
-
-    // Obtener médico asignado
     const { data: medico } = await supabase
       .from("medico")
       .select("id_usuario")
       .eq("id_medico", paciente.id_medico)
       .single();
 
-    if (!medico) throw new Error("Médico asignado no encontrado");
-
-    // Obtener correo del usuario del médico
     const { data: usuarioMedico } = await supabase
       .from("usuario")
       .select("correo, nombre_completo")
       .eq("id_usuario", medico.id_usuario)
       .single();
 
-    if (!usuarioMedico) throw new Error("Usuario del médico no encontrado");
-    
-    // Obtener nombre del PACIENTE (usuario del paciente)
     const { data: usuarioPaciente } = await supabase
       .from("usuario")
       .select("nombre_completo")
       .eq("id_usuario", paciente.id_usuario)
       .single();
-
-    if (!usuarioPaciente) throw new Error("Usuario del paciente no encontrado");
 
     const datosCorreo = {
       nombrePaciente: usuarioPaciente.nombre_completo,
@@ -166,8 +232,6 @@ const registrarAlerta = async (req, res) => {
       id_tipo_alerta === 1
         ? getHipoTemplate(datosCorreo)
         : getHiperTemplate(datosCorreo);
-
-
 
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -187,17 +251,17 @@ const registrarAlerta = async (req, res) => {
       html: template.html
     });
 
-
-    // Devolvemos 201 Created con el objeto de la alerta dentro de "data"
-    return response(res, 'success', 201, 'Alerta registrada y correo enviado correctamente al médico', alertaInsertada);
-
   } catch (err) {
     console.error('Error al insertar alerta o enviar correo:', err.message);
-    
-    // Cualquier Error lanzado arriba (ej. paciente no encontrado) cae aquí y se devuelve de forma segura
-    return response(res, 'error', 500, 'Ocurrió un error interno al registrar la alerta o procesar la notificación', err.message);
+
+    return response(
+      res,
+      'error',
+      500,
+      'Ocurrió un error interno al registrar la alerta o procesar la notificación',
+      err.message
+    );
   }
 };
-
 
 module.exports = { datosParaGlucosa ,registrarAlerta };

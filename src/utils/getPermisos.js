@@ -32,7 +32,6 @@ const getPermisos = async (req, res, next) => {
         )
       `)
       .eq('id_usuario', id_usuario);
-
     if (error) {
       console.error('Error de Supabase consultando roles:', error);
       throw error;
@@ -60,7 +59,7 @@ const getPermisos = async (req, res, next) => {
 
     // 5. Guardamos en la request limpiando posibles duplicados usando Set
     req.permisos = [...new Set(permisosExtraidos)];
-
+    console.log(`permisos del usuario ${permisosExtraidos}`)
     next();
   } catch (error) {
     console.error('Error cargando permisos por rol:', error);

@@ -1152,41 +1152,69 @@ const activarCuenta = async (req, res) => {
     const { 
       id_usuario, 
       rol_seleccionado, 
-      administrador_id_admin = 1 // Por defecto 1 si no lo envías, idealmente sacarlo del token
+      id_rol,
+      fecha_fin,
+      administrador_id_admin = 1
     } = req.body;
 
-    if (!id_usuario || !rol_seleccionado) {
-      return response(res, 'error', 400, 'Faltan datos críticos (id_usuario o rol)');
+    if (!id_usuario || !rol_seleccionado || !id_rol) {
+      return response(res, 'error', 400, 'Faltan datos críticos');
     }
 
-    // 1. Buscamos el ID del rol en el sistema
-    const { data: rolData, error: rolError } = await supabase
+    const idRolNum = Number(id_rol);
+    const esPaciente = idRolNum === 3;
+  const esAuditorPaciente = idRolNum === 6;
+  const esMedico = idRolNum === 4;
+  const esAuditorMedico=idRolNum===7;
+
+    // Obtener rol desde BD
+    const { data: rolDB, error: rolError } = await supabase
       .from('roles')
-      .select('id_rol')
-      .ilike('nombre_rol', rol_seleccionado)
+      .select('nombre_rol')
+      .eq('id_rol', idRolNum)
       .single();
 
-    if (rolError) throw new Error('El rol especificado no existe en el catálogo.');
-    const id_rol = rolData.id_rol;
+    if (rolError || !rolDB) {
+      throw new Error('Rol no válido');
+    }
+
+    const nombreRol = rolDB.nombre_rol.toLowerCase();
+    const esAuditor = nombreRol.includes('auditor');
+
+    console.log('ROL:', nombreRol);
+    console.log('ES AUDITOR:', esAuditor);
+    console.log('FECHA FIN:', fecha_fin);
 
     // ==========================================
-    // FLUJO PARA PACIENTE
+    // PACIENTE
     // ==========================================
-    if (rol_seleccionado.toLowerCase() === 'paciente') {
-      const { id_medico, id_actividad, genero, peso, altura, enfermedad_id, tratamiento_id, dosis_, nombre_emergencia, numero_emergencia, embarazada, semanas } = req.body;
-      
+    if (esPaciente || esAuditorPaciente){
+
+      const { 
+        id_medico, id_actividad, genero, peso, altura,
+        enfermedad_id, tratamiento_id, dosis_,
+        nombre_emergencia, numero_emergencia,
+        embarazada, semanas
+      } = req.body;
+
       const imgFiles = req.files?.foto_perfil;
-      if (!imgFiles || imgFiles.length === 0) return response(res, 'error', 400, 'Falta la foto de perfil extraída del PDF');
+      if (!imgFiles) {
+        return response(res, 'error', 400, 'Falta foto de perfil');
+      }
 
-      // Subir imagen
       const img = imgFiles[0];
-      const imgUpload = await supabase.storage
-        .from('perfiles_pacientes')
-        .upload(`imgs/${Date.now()}_${img.originalname}`, img.buffer, { contentType: img.mimetype });
-      if (imgUpload.error) throw imgUpload.error;
-      const imgUrl = supabase.storage.from('perfiles_pacientes').getPublicUrl(imgUpload.data.path).data.publicUrl;
+      const path = `imgs/${Date.now()}_${img.originalname}`;
 
-      // Insertar Paciente
+      const { error: uploadError } = await supabase.storage
+        .from('perfiles_pacientes')
+        .upload(path, img.buffer, { contentType: img.mimetype });
+
+      if (uploadError) throw uploadError;
+
+      const imgUrl = supabase.storage
+        .from('perfiles_pacientes')
+        .getPublicUrl(path).data.publicUrl;
+
       const { data: pacienteData, error: pacienteError } = await supabase
         .from('paciente')
         .insert([{
@@ -1201,81 +1229,116 @@ const activarCuenta = async (req, res) => {
           numero_emergencia,
           foto_perfil: imgUrl,
           administrador_id_admin: parseInt(administrador_id_admin)
-        }]).select();
+        }])
+        .select();
+
       if (pacienteError) throw pacienteError;
 
       const id_paciente = pacienteData[0].id_paciente;
 
-      // Seguimiento embarazo
       if (embarazada === 'true' && semanas) {
         await supabase.from('seguimiento_embarazo').insert({
-          id_paciente, semanas_embarazo: parseInt(semanas)
+          id_paciente,
+          semanas_embarazo: parseInt(semanas)
         });
       }
 
-      // Enfermedades y Tratamientos
       if (enfermedad_id && tratamiento_id) {
-        await supabase.from('paciente_enfermedad').insert({ id_paciente, id_enfermedad: parseInt(enfermedad_id) });
-        await supabase.from('tratamiento_enfermedad').insert({ id_paciente, id_tratamiento: parseInt(tratamiento_id), dosis: dosis_ });
+        await supabase.from('paciente_enfermedad').insert({
+          id_paciente,
+          id_enfermedad: parseInt(enfermedad_id)
+        });
+
+        await supabase.from('tratamiento_enfermedad').insert({
+          id_paciente,
+          id_tratamiento: parseInt(tratamiento_id),
+          dosis: dosis_
+        });
       }
-    } 
+    }
+
     // ==========================================
-    // FLUJO PARA MÉDICO
+    // MEDICO
     // ==========================================
-    else if (rol_seleccionado.toLowerCase() === 'medico') {
+    else if (esMedico || esAuditorMedico) {
+
       const { id_especialidad, departamento } = req.body;
 
       const pdfFiles = req.files?.matriculaProfesional;
       const carnetFiles = req.files?.carnetProfesional;
 
-      if (!pdfFiles || !carnetFiles) return response(res, 'error', 400, 'Faltan documentos profesionales (Matrícula o Carnet)');
+      if (!pdfFiles || !carnetFiles) {
+        return response(res, 'error', 400, 'Faltan documentos');
+      }
 
-      // Subir archivos
-      const pdfUpload = await supabase.storage.from('Matriculas_PDF').upload(`pdfs/${Date.now()}_${pdfFiles[0].originalname}`, pdfFiles[0].buffer, { contentType: pdfFiles[0].mimetype });
-      const imgUpload = await supabase.storage.from('Carnets_IMG').upload(`imgs/${Date.now()}_${carnetFiles[0].originalname}`, carnetFiles[0].buffer, { contentType: carnetFiles[0].mimetype });
-      
-      if (pdfUpload.error) throw pdfUpload.error;
-      if (imgUpload.error) throw imgUpload.error;
+      const pdfPath = `pdfs/${Date.now()}_${pdfFiles[0].originalname}`;
+      const imgPath = `imgs/${Date.now()}_${carnetFiles[0].originalname}`;
 
-      const pdfUrl = supabase.storage.from('Matriculas_PDF').getPublicUrl(pdfUpload.data.path).data.publicUrl;
-      const imgUrl = supabase.storage.from('Carnets_IMG').getPublicUrl(imgUpload.data.path).data.publicUrl;
+      const { error: pdfError } = await supabase.storage
+        .from('Matriculas_PDF')
+        .upload(pdfPath, pdfFiles[0].buffer, { contentType: pdfFiles[0].mimetype });
 
-      // Insertar Médico
-      const { error: medicoError } = await supabase
-        .from('medico')
-        .insert([{
-          id_usuario: parseInt(id_usuario),
-          id_especialidad: parseInt(id_especialidad),
-          departamento,
-          matricula_profesional: pdfUrl,
-          carnet_profesional: imgUrl,
-          administrador_id_admin: parseInt(administrador_id_admin)
-        }]);
-      if (medicoError) throw medicoError;
+      const { error: imgError } = await supabase.storage
+        .from('Carnets_IMG')
+        .upload(imgPath, carnetFiles[0].buffer, { contentType: carnetFiles[0].mimetype });
+
+      if (pdfError || imgError) throw pdfError || imgError;
+
+      const pdfUrl = supabase.storage.from('Matriculas_PDF').getPublicUrl(pdfPath).data.publicUrl;
+      const imgUrl = supabase.storage.from('Carnets_IMG').getPublicUrl(imgPath).data.publicUrl;
+
+      await supabase.from('medico').insert([{
+        id_usuario: parseInt(id_usuario),
+        id_especialidad: parseInt(id_especialidad),
+        departamento,
+        matricula_profesional: pdfUrl,
+        carnet_profesional: imgUrl,
+        administrador_id_admin: parseInt(administrador_id_admin)
+      }]);
     }
 
     // ==========================================
-    // ACTIVACIÓN FINAL DE LA CUENTA
+    // ASIGNAR ROL (AQUÍ VA TODO EL TEMA AUDITOR)
     // ==========================================
-    
-    // Asignar en matriz de permisos (RBAC) con upsert por si acaso
-    await supabase.from('usuario_rol').upsert([{ 
-      id_usuario: parseInt(id_usuario), 
-      id_rol 
-    }], { onConflict: 'id_usuario, id_rol' });
+    const { error: rolInsertError } = await supabase
+      .from('usuario_rol')
+      .upsert([{
+        id_usuario: parseInt(id_usuario),
+        id_rol: idRolNum,
+        fecha_fin: esAuditor ? fecha_fin : null,
+        activo: true
+      }], { onConflict: 'id_usuario' });
 
-    // Actualizar estado del usuario a Activo y cambiar su etiqueta de rol
+    if (rolInsertError) throw rolInsertError;
+
+    // ==========================================
+    // ACTIVAR USUARIO
+    // ==========================================
     const { error: updateError } = await supabase
       .from('usuario')
-      .update({ estado: true, rol: rol_seleccionado })
+      .update({
+        estado: true,
+        rol: rol_seleccionado
+      })
       .eq('id_usuario', parseInt(id_usuario));
+
     if (updateError) throw updateError;
 
-    return response(res, 'success', 200, `Cuenta activada exitosamente como ${rol_seleccionado.toUpperCase()}`);
+    return response(
+      res,
+      'success',
+      200,
+      `Cuenta activada como ${esAuditor ? 'AUDITOR ' : ''}${rol_seleccionado.toUpperCase()}`
+    );
 
   } catch (error) {
     console.error("❌ Error en activarCuenta:", error);
-    return response(res, 'error', 500, 'Error interno al procesar la activación: ' + error.message);
+    return response(
+      res,
+      'error',
+      500,
+      'Error interno: ' + error.message
+    );
   }
 };
 
@@ -1521,8 +1584,31 @@ const obtenerLogsSeguridad = async (req, res) => {
   }
 };
 
+const obtenerRolesTipo = async (req, res) => {
+  const { tipo } = req.query; // medico | paciente
+
+  try {
+    let query = supabase.from('roles').select('*');
+
+    if (tipo) {
+      query = query.ilike('nombre_rol', `%${tipo}%`);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      return response(res, "error", 500, "Error al obtener roles", null);
+    }
+
+    return response(res, "success", 200, "Roles obtenidos", data);
+  } catch (err) {
+    console.error(err);
+    return response(res, "error", 500, "Error interno", null);
+  }
+};
+
 
 module.exports={medicosActivos,/*medicosSolicitantes,activarMedico,*/pacientesActivos, pacientesCompletos,/*pacientesSolicitantes,
   activarPaciente,*/perfilAdmin,agregarAdmin,obtenerAdmins, /*actualizarPermisosAdmins, */obtenerRoles,insertarRoles,
    /*actualizarPermisosPacientes,*/obtenerRolesPermisos,actualizarMatrizRoles,obtenerSolicitudesPendientes,activarCuenta,
-   suspenderUsuario,reactivarUsuario,medicosCompletos, obtenerLogsAplicacion,obtenerLogsSeguridad};
+   suspenderUsuario,reactivarUsuario,medicosCompletos, obtenerLogsAplicacion,obtenerLogsSeguridad,obtenerRolesTipo};

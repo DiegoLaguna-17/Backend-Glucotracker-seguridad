@@ -145,7 +145,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       console.log(`[LOGIN FALLIDO] Correo inexistente: ${correo}`);
       
       await guardarLogSeguridad({
-        id_usuario: null, // No sabemos quién es
+        id_usuario: null,
         evento: 'LOGIN_FALLIDO',
         descripcion: 'Intento de login con correo inexistente',
         email_intento: correo,
@@ -160,7 +160,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
     if (usuarioError) throw usuarioError;
     const usuario = usuarioData;
 
-    // 3️⃣ Verificar si la cuenta está inactiva o bloqueada
+    // 3️⃣ Verificar si la cuenta general está inactiva o bloqueada
     if (usuario.estado === false) {
       let descripcionInactividad = 'Intento de login en cuenta inactiva';
       
@@ -188,7 +188,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       return response(res, 'error', 403, 'Tu cuenta está inactiva. Por favor contacta a soporte.');
     }
 
-    // 5️⃣ Verificar contraseña de forma segura
+    // 4️⃣ Verificar contraseña de forma segura
     const isMatch = await bcrypt.compare(String(contrasena), usuario.contrasena);
 
     if (!isMatch) {
@@ -202,7 +202,6 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       if (nuevosIntentos >= 3) {
         updateData.estado = false;
         const fechaDesbloqueo = new Date();
-        // FIX: Sumar realmente los 100 años
         fechaDesbloqueo.setFullYear(fechaDesbloqueo.getFullYear() + 100); 
         updateData.bloqueado_hasta = fechaDesbloqueo.toISOString();
 
@@ -212,7 +211,6 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
 
       await supabase.from("usuario").update(updateData).eq("id_usuario", usuario.id_usuario);
 
-      // 🔴 LOG: Contraseña incorrecta o Bloqueo de cuenta
       await guardarLogSeguridad({
         id_usuario: usuario.id_usuario,
         evento: tipoEvento,
@@ -223,10 +221,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
         exito: false
       });
 
-      const mensaje = nuevosIntentos >= 3
-        ? 'Cuenta bloqueada por múltiples intentos fallidos.'
-        : MENSAJE_ERROR_AUTH;
-
+      const mensaje = nuevosIntentos >= 3 ? 'Cuenta bloqueada por múltiples intentos fallidos.' : MENSAJE_ERROR_AUTH;
       console.log(`[LOGIN FALLIDO] Intento ${nuevosIntentos} fallido para: ${correo}`);
       
       if (nuevosIntentos === 3) {
@@ -237,12 +232,44 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
 
     // --- HASTA AQUÍ LAS CREDENCIALES SON 100% CORRECTAS ---
 
-    // 6️⃣ Reiniciar intentos fallidos tras éxito
+    // 5️⃣ Reiniciar intentos fallidos tras éxito
     if (usuario.intentos_fallidos > 0) {
       await supabase.from("usuario").update({ intentos_fallidos: 0, bloqueado_hasta: null }).eq("id_usuario", usuario.id_usuario);
     }
 
-    // Verificar vigencia (3 meses)
+    // 6️⃣ SIEMPRE VALIDAR EL ROL Y EL ESTADO ACTIVO EN `usuario_rol`
+    // Buscamos el registro en la tabla pivote para este usuario
+    const { data: usuarioRolData, error: usuarioRolError } = await supabase
+      .from('usuario_rol')
+      .select('activo, id_rol')
+      .eq('id_usuario', usuario.id_usuario)
+      .maybeSingle();
+
+    if (usuarioRolError) throw usuarioRolError;
+
+    // Si el usuario obligatoriamente debe tener un rol asignado en la tabla usuario_rol:
+    if (!usuarioRolData) {
+      return response(res, 'error', 403, 'El usuario no tiene un rol asignado en el sistema.');
+    }
+
+    // Cortamos el flujo INMEDIATAMENTE si el rol está marcado como inactivo o expirado
+    if (usuarioRolData.activo === false) {
+      console.log(`[LOGIN RECHAZADO] Rol inactivo/expirado para el usuario: ${correo}`);
+      
+      await guardarLogSeguridad({
+        id_usuario: usuario.id_usuario,
+        evento: 'LOGIN_FALLIDO',
+        descripcion: `Intento de acceso rechazado: El rol asignado al usuario está inactivo o expirado.`,
+        email_intento: correo,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        exito: false
+      });
+
+      return response(res, 'error', 403, 'Tu acceso o rol en el sistema ha expirado o se encuentra inactivo.');
+    }
+
+    // 7️⃣ Verificar vigencia de contraseña (3 meses)
     const { data: historialData } = await supabase
       .from('historial_contrasena')
       .select('created_at')
@@ -268,36 +295,44 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       }
     }
 
-    // 8️⃣ Buscar Rol del Usuario
+    // 8️⃣ Buscar el ID del Perfil del Usuario en su tabla respectiva
     const rolMap = {
       administrador: 'id_admin',
       soporte: 'id_admin',
       paciente: 'id_paciente',
-      medico: 'id_medico'
+      medico: 'id_medico',
+      auditor: 'id_admin',
     };
 
-    let tablaRol = usuario.rol;
-    if (tablaRol === "soporte") {
+    let tablaRol = usuario.rol ? usuario.rol.toLowerCase() : '';
+    if (tablaRol === "soporte" || tablaRol.includes("auditor")) {
       tablaRol = "administrador"; 
     }
+    if (tablaRol.includes("medico")) {
+      tablaRol = "medico"; 
+    }
 
-    const columnaIdRol = rolMap[usuario.rol];
+    const columnaIdPerfil = rolMap[usuario.rol] || rolMap[tablaRol];
 
-    const { data: rolData, error: rolError } = await supabase
+    if (!columnaIdPerfil) {
+        throw new Error(`Rol desconocido o no mapeado: ${usuario.rol}`);
+    }
+
+    const { data: perfilData, error: perfilError } = await supabase
       .from(tablaRol)
-      .select(columnaIdRol)
+      .select(columnaIdPerfil)
       .eq("id_usuario", usuario.id_usuario)
       .single();
 
-    if (rolError || !rolData) {
-      throw new Error(`Inconsistencia en BD: No se encontró registro en ${tablaRol} para usuario ${usuario.id_usuario}`);
+    if (perfilError || !perfilData) {
+      throw new Error(`Inconsistencia en BD: No se encontró registro en tabla '${tablaRol}' para usuario ${usuario.id_usuario}`);
     }
 
-    const id_rol = rolData[columnaIdRol];
+    const id_perfil_especifico = perfilData[columnaIdPerfil]; 
 
     // 9️⃣ Generar y enviar OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    setOTP(usuario.id_usuario, otp, 5 * 60 * 1000); 
+    await setOTP(usuario.id_usuario, otp, 5 * 60 * 1000); 
 
     const { subject, html } = getOtpTemplate({
       nombreUsuario: usuario.correo,
@@ -321,7 +356,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
     // 🔟 Respuesta final estandarizada
     return response(res, 'success', 200, 'Credenciales correctas. OTP enviado al correo.', {
       id_usuario: usuario.id_usuario,
-      id_rol: id_rol
+      id_rol: id_perfil_especifico 
     });
 
   } catch (error) {
@@ -329,6 +364,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
     return response(res, 'error', 500, 'Ocurrió un error interno del servidor al procesar tu solicitud. Intenta nuevamente.');
   }
 });
+
 // Importación de la rama de seguridad (asegúrate de que la ruta sea correcta)
 const { esContrasenaRobusta } = require('./src/utils/security');
 
@@ -510,6 +546,9 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
     if (usuario.rol == "soporte") {
       usuario.rol = "administrador";
     }
+    if(usuario.rol.includes('medico')){
+      usuario.rol='medico';
+    }
 
     // 4️⃣ Configuración por rol
     const rolMap = {
@@ -547,7 +586,38 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
     } else {
       id_rol = rolData.id_paciente;
     }
+    const { data: rolesData, error: rolesError } = await supabase
+  .from("usuario_rol")
+  .select(`
+    id_rol,
+    fecha_fin,
+    activo,
+    roles (
+      nombre_rol
+    )
+  `)
+  .eq("id_usuario", id_usuario)
+  .eq("activo", true);
 
+
+  if (!rolesData || rolesData.length === 0) {
+  return response(res, 'error', 403, 'Usuario sin roles activos');
+}
+
+// 🔥 rol principal (no auditor)
+const rolPrincipalObj = rolesData.find(r => 
+  !r.roles.nombre_rol.toLowerCase().includes('auditor')
+) || rolesData[0];
+
+let nombreRol = rolPrincipalObj.roles.nombre_rol.toLowerCase();
+
+// 🔥 detectar auditor
+const auditorObj = rolesData.find(r =>
+  r.roles.nombre_rol.toLowerCase().includes('auditor')
+);
+
+const esAuditor = !!auditorObj;
+const fecha_fin = auditorObj?.fecha_fin || null;
     // 7️⃣ Obtener permisos
     const { data: permisosData, error: errorPermisos } = await supabase
       .from("rol_permiso")
@@ -593,7 +663,7 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
     return response(res, 'success', 200, 'Autenticación exitosa', {
       usuario: {
         id_usuario: usuario.id_usuario,
-        rol: usuario.rol,
+        rol: nombreRol,
         id_rol,
         ...(cargo ? { cargo } : {}), // 👈 SOLO ADMIN
         permisos

@@ -14,8 +14,13 @@ app.use(express.json());
 //Correccion de vulnerabilidad CSP POLITICAS DE CABECERA DE SEGURIDAD NO CONFIGURADAS: correcion de vulnerabilidad sobre que recursos puede cargar
 app.use((req, res, next) => {
   res.setHeader("Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; form-action 'self'");
+    "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; font-src 'none'; frame-ancestors 'none'; form-action 'none'");
   res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   next();
 });
 const { sendEmail } = require('./src/email/sendEmail');

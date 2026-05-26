@@ -791,7 +791,6 @@ const actualizarMedico = async (req, res) => {
 
     const { id_usuario } = medico;
 
-    // ================== 🧠 DATOS ANTES ==================
 
     const { data: usuarioAntes } = await supabase
       .from('usuario')
@@ -805,7 +804,6 @@ const actualizarMedico = async (req, res) => {
       .eq('id_medico', id_medico)
       .single();
 
-    // ================== ✏️ UPDATES ==================
 
     const usuarioUpdates = {};
     if (telefono !== undefined) usuarioUpdates["teléfono"] = telefono;
@@ -855,7 +853,6 @@ const actualizarMedico = async (req, res) => {
       return response(res, 'error', 400, 'No hay datos para actualizar');
     }
 
-    // ================== 💾 UPDATE USUARIO ==================
 
     if (Object.keys(usuarioUpdates).length > 0) {
       const { error: errorUsuario } = await supabase
@@ -866,7 +863,6 @@ const actualizarMedico = async (req, res) => {
       if (errorUsuario) throw errorUsuario;
     }
 
-    // ================== 💾 UPDATE MEDICO ==================
 
     if (Object.keys(medicoUpdates).length > 0) {
       const { error: errorMedico } = await supabase
@@ -877,7 +873,6 @@ const actualizarMedico = async (req, res) => {
       if (errorMedico) throw errorMedico;
     }
 
-    // ================== 🔍 COMPARAR CAMBIOS ==================
 
     const cambios = [];
 
@@ -908,7 +903,6 @@ const actualizarMedico = async (req, res) => {
       });
     }
 
-    // ================== 🧾 LOG ==================
 
     if (cambios.length > 0) {
       const logApp = {

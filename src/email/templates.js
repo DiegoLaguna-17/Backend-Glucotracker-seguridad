@@ -96,5 +96,37 @@ const getWelcomeAdminTemplate = ({ nombreAdmin, correo, contrasena }) => ({
     </div>
   `
 });
-module.exports = { getHipoTemplate, getHiperTemplate, getOtpTemplate, getRecuperacionTemplate, getDesbloqueoTemplate, getWelcomeAdminTemplate};
+
+const getVerificacionCorreoTemplate = ({ nombreUsuario, token }) => {
+  const url = `${process.env.FRONTEND_URL}/verificar/correo?token=${token}`;
+
+  return {
+    subject: `Verifica tu cuenta - GlucoTracker`,
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2>Hola ${nombreUsuario},</h2>
+        <p>Gracias por registrarte en <strong>GlucoTracker</strong>.</p>
+        <p>Por favor, confirma tu correo haciendo clic en el siguiente botón:</p>
+
+        <div style="margin: 20px 0;">
+          <a href="${url}" 
+             style="background-color: #7C992F; color: white; padding: 12px 20px; 
+             text-decoration: none; border-radius: 5px; display: inline-block;">
+             Verificar correo
+          </a>
+        </div>
+
+        <p>Este enlace expirará en 24 horas.</p>
+
+        <p>Si no creaste esta cuenta, puedes ignorar este mensaje.</p>
+
+        <br>
+        <p>Atentamente,<br>GlucoTracker</p>
+      </div>
+    `
+  };
+};
+
+module.exports = { getHipoTemplate, getHiperTemplate, getOtpTemplate, getRecuperacionTemplate, getDesbloqueoTemplate,
+   getWelcomeAdminTemplate, getVerificacionCorreoTemplate};
 

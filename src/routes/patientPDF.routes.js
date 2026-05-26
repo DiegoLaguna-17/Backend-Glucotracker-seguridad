@@ -11,10 +11,11 @@ router.post("/paciente/pdf", async (req, res) => {
     }
 
     const pdfBuffer = await generatePatientPDF(paciente);
-
+    //correcion de vulnerabilidad de RUTA TRANSVERSAL RIESGO ALTO: VERIFICA QUE SI EL ID CONTIENE ALGO QUE NO SEA UN NUMERO LO CONVIERTE EN UN GUION BAJO PARA EVITAR QUE MANIPULEN EL SERVIDOR MODIFICANDO EL NOMBRE DE ARCHIVO PDF QUE SE DESCARGA
+    const safeId = String(paciente.id).replace(/[^a-zA-Z0-9_-]/g, '_');
     res.set({
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename=paciente_${paciente.id}.pdf`,
+      "Content-Disposition": `attachment; filename=paciente_${safeId}.pdf`,
       "Content-Length": pdfBuffer.length,
     });
 

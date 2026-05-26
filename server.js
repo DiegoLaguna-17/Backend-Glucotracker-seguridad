@@ -11,12 +11,19 @@ const multer = require('multer');
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 app.use(express.json());
+//Correccion de vulnerabilidad CSP POLITICAS DE CABECERA DE SEGURIDAD NO CONFIGURADAS: correcion de vulnerabilidad sobre que recursos puede cargar
+app.use((req, res, next) => {
+  res.setHeader("Content-Security-Policy",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; form-action 'self'");
+  next();
+});
 const { sendEmail } = require('./src/email/sendEmail');
 const { getOtpTemplate } = require('./src/email/templates');
 const { setOTP } = require("./otpCache")
 const loginPrueba = require('./src/controllers/auth.controller')
+//Correccion de vulnerabilidad CSP RIESGO MEDIO:  PARA QUE NINGUN DOMINIO PUEDA HACER PETICIONES A LA API ELIMINANDO EL ORIGIN *
 app.use(cors({
-  origin: ['http://localhost:4200', 'https://frontend-glucotracker-seguridad.vercel.app','*'],
+  origin: ['http://localhost:4200', 'https://frontend-glucotracker-seguridad.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH','OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true

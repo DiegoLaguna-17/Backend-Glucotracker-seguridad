@@ -15,6 +15,7 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader("Content-Security-Policy",
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader("X-Frame-Options", "DENY");
   next();
 });
 const { sendEmail } = require('./src/email/sendEmail');

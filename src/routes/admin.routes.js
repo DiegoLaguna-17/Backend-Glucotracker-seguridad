@@ -5,7 +5,7 @@ const { pacientesActivos, /*pacientesSolicitantes, activarPaciente,*/ medicosAct
     perfilAdmin, agregarAdmin, obtenerAdmins,/*actualizarPermisosAdmins,*/obtenerRoles,insertarRoles,/*actualizarPermisosPacientes,*/
 obtenerRolesPermisos,actualizarMatrizRoles,obtenerSolicitudesPendientes,activarCuenta,suspenderUsuario,reactivarUsuario, 
 pacientesCompletos,
-medicosCompletos} = require('../controllers/admin.controller');
+medicosCompletos, obtenerLogsAplicacion, obtenerLogsSeguridad, obtenerRolesTipo} = require('../controllers/admin.controller');
 const auditoriaAdmin = require("../middlewares/auditoria.admin"); 
 const verificarToken = require('../utils/verificarToken'); // La funcion para verificar un token
 const {getPermisos}=require("../utils/getPermisos");
@@ -46,6 +46,15 @@ router.put('/activar-cuenta',  upload.fields([
   { name: "matriculaProfesional", maxCount: 1 },
   { name: "carnetProfesional", maxCount: 1 }
 ]), verificarToken,getPermisos,verificarPermiso('ACEPTAR_SOLICITUD'),auditoriaAdmin,activarCuenta);
+
+
+router.get('/logs/aplicacion',obtenerLogsAplicacion)
+router.get('/logs/seguridad',obtenerLogsSeguridad)
+
+
+
+router.get('/roles/tipo',obtenerRolesTipo)
+
 
 module.exports = router;
 

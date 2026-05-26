@@ -445,28 +445,55 @@ const alertasResueltas = async (req, res) => {
 const retroalimentacionAlerta = async (req, res) => {
   const { id_medico, fecha_registro, mensaje, alertas_id_alerta } = req.body;
 
-  // 1️⃣ Validación de campos
   if (!id_medico || !fecha_registro || !mensaje || !alertas_id_alerta) {
+    await guardarLogCompleto(
+      {
+        id_usuario: null,
+        modulo: 'alertas',
+        entidad: 'alertas',
+        accion: 'VALIDATION_ERROR',
+        descripcion: 'Intento de resolver alerta con campos incompletos',
+        endpoint: req.originalUrl,
+        metodo: req.method,
+        codigo_http: 400,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        fecha: new Date()
+      },
+      [
+        { tipo: "IDENTIFICADOR", campo: 'id_medico', valor_entrante: id_medico || 'FALTANTE' },
+        { tipo: "IDENTIFICADOR", campo: 'id_alerta', valor_entrante: alertas_id_alerta || 'FALTANTE' }
+      ]
+    );
+
     return response(res, 'error', 400, 'Todos los campos son requeridos para resolver la alerta');
   }
 
+
+  let id_usuario_real = null;
+
   try {
-    // 2️⃣ INSERT en Retroalimentacion
+
+    const { data: medicoData, error: medicoError } = await supabase
+      .from("medico")
+      .select("id_usuario")
+      .eq("id_medico", id_medico) 
+      .single();
+
+    if (medicoError || !medicoData) {
+      console.warn("⚠️ No se pudo obtener id_usuario desde medico:", medicoError);
+      throw medicoError || new Error("No se encontró el usuario del médico especificado");
+    } else {
+      id_usuario_real = medicoData.id_usuario;
+    }
+
     const { data: retroData, error: retroError } = await supabase
       .from('retroalimentacion')
-      .insert([
-        {
-          id_medico,
-          fecha_registro,
-          mensaje,
-          alertas_id_alerta
-        }
-      ])
+      .insert([ { id_medico, fecha_registro, mensaje, alertas_id_alerta } ])
       .select();
 
     if (retroError) throw retroError;
 
-    // 3️⃣ UPDATE en Alertas, poniendo su estado = false (Resuelta)
     const { data: alertaUpdate, error: alertaError } = await supabase
       .from('alertas')
       .update({ estado: false })
@@ -475,8 +502,29 @@ const retroalimentacionAlerta = async (req, res) => {
 
     if (alertaError) throw alertaError;
 
-    // 4️⃣ Respuesta exitosa estandarizada
-    // Pasamos un objeto con ambas datas dentro del parámetro "data" de nuestra función response
+   
+    await guardarLogCompleto(
+      {
+        id_usuario: id_usuario_real,
+        modulo: 'alertas',
+        entidad: 'alertas',
+        accion: 'UPDATE',
+        descripcion: `Médico respondió y resolvió la alerta ${alertas_id_alerta}`,
+        endpoint: req.originalUrl,
+        metodo: req.method,
+        codigo_http: 200,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        fecha: new Date()
+      },
+      [
+        { tipo: "IDENTIFICADOR", campo: 'id_alerta', valor_nuevo: alertas_id_alerta },
+        { tipo: "IDENTIFICADOR", campo: 'id_medico', valor_nuevo: id_medico },
+        { tipo: "VALOR", campo: 'mensaje', valor_nuevo: mensaje },
+        { tipo: "VALOR", campo: 'estado', valor_nuevo: 'RESUELTA' }
+      ]
+    );
+
     return response(res, 'success', 200, 'Alerta respondida y actualizada correctamente', {
       retroalimentacion: retroData,
       alerta_actualizada: alertaUpdate
@@ -484,9 +532,57 @@ const retroalimentacionAlerta = async (req, res) => {
 
   } catch (err) {
     console.error('Error al responder alerta:', err.message);
-    
-    // 5️⃣ Manejo de error del servidor
+
+    await guardarLogCompleto(
+      {
+        id_usuario: id_usuario_real, 
+        modulo: 'alertas',
+        entidad: 'alertas',
+        accion: 'ERROR_SERVER',
+        descripcion: `Error interno al intentar resolver la alerta ${alertas_id_alerta}: ${err.message}`,
+        endpoint: req.originalUrl,
+        metodo: req.method,
+        codigo_http: 500,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        fecha: new Date()
+      },
+      [
+        { tipo: "IDENTIFICADOR", campo: 'id_alerta', valor_entrante: alertas_id_alerta },
+        { tipo: "IDENTIFICADOR", campo: 'id_medico', valor_entrante: id_medico },
+        { tipo: "ERROR_DETALLE", campo: 'mensaje_error', valor_entrante: err.message },
+        { tipo: "ERROR_DETALLE", campo: 'stack_trace', valor_entrante: err.stack || 'No disponible' }
+      ]
+    );
+
     return response(res, 'error', 500, 'Error interno del servidor al responder la alerta', err.message);
+  }
+};
+const guardarLogCompleto = async (logApp, logDetalles = []) => {
+  try {
+    const { data: logInsertado, error: errorLog } = await supabase
+      .from("logs_aplicacion")
+      .insert([logApp])
+      .select()
+      .single();
+
+    if (errorLog) throw errorLog;
+
+    if (logDetalles.length > 0) {
+      const detalles = logDetalles.map(d => ({
+        ...d,
+        id_log_aplicacion: logInsertado.id
+      }));
+
+      const { error: errorDetalle } = await supabase
+        .from("logs_detalle")
+        .insert(detalles);
+
+      if (errorDetalle) throw errorDetalle;
+    }
+
+  } catch (err) {
+    console.error("💥 Error guardando log:", err.message);
   }
 };
 
@@ -501,69 +597,188 @@ const registrarGlucosaMedico = async (req, res) => {
     observaciones
   } = req.body;
 
-  // 1️⃣ Validación de campos obligatorios
+  console.log("BODY RECIBIDO:", req.body);
+
   if (!fecha || !hora || !id_medico || !id_momento || !id_paciente || !nivel_glucosa) {
-    return response(
-      res, 
-      'error', 
-      400, 
-      "Todos los campos (menos observaciones) deben estar llenados"
+    console.error("VALIDACIÓN FALLIDA", {
+      fecha,
+      hora,
+      id_medico,
+      id_momento,
+      id_paciente,
+      nivel_glucosa
+    });
+    await guardarLogCompleto(
+      {
+        id_usuario: null,
+        modulo: 'glucosa',
+        entidad: 'glucosa',
+        accion: 'VALIDATION_ERROR',
+        descripcion: 'Intento de registrar glucosa con campos incompletos',
+        endpoint: req.originalUrl,
+        metodo: req.method,
+        codigo_http: 400,
+        ip_origen: req.ip,
+        user_agent: req.headers['user-agent'],
+        fecha: new Date()
+      },
+      [
+       
+      ]
     );
+    return response(res, 'error', 400, "Todos los campos (menos observaciones) deben estar llenados");
   }
 
   try {
-    // 2️⃣ Inserción en la base de datos
+    console.log("🧪 TIPOS:", {
+      id_medico: typeof id_medico,
+      id_paciente: typeof id_paciente,
+      id_momento: typeof id_momento,
+      nivel_glucosa: typeof nivel_glucosa
+    });
+
+    const payload = {
+      id_paciente: parseInt(id_paciente),
+      id_medico: parseInt(id_medico),
+      id_momento: parseInt(id_momento),
+      fecha,
+      hora,
+      nivel_glucosa: parseFloat(nivel_glucosa),
+      observaciones: observaciones || null
+    };
+
+    console.log("📤 PAYLOAD A INSERTAR:", payload);
+
+    // ✅ INSERT REGISTRO
     const { data: glucosaData, error: glucosaError } = await supabase
       .from("registro_glucosa")
-      .insert([
-        {
-          id_paciente: parseInt(id_paciente),
-          id_medico: parseInt(id_medico),
-          id_momento: parseInt(id_momento),
-          fecha,
-          hora,
-          nivel_glucosa: parseFloat(nivel_glucosa),
-          observaciones: observaciones || null
-        }
-      ])
+      .insert([payload])
       .select();
 
-    if (glucosaError) throw glucosaError;
+    if (glucosaError) {
+      console.error("💥 ERROR SUPABASE:", glucosaError);
+      throw glucosaError;
+    }
 
     const registro_glucosa = glucosaData[0];
 
-    // 3️⃣ Respuesta exitosa estandarizada
-    return response(
-      res, 
-      'success', 
-      201, 
-      "Registro de glucosa insertado correctamente", 
+    console.log("✅ REGISTRO INSERTADO:", registro_glucosa);
+
+    // 🔎 OBTENER id_usuario REAL DESDE medico
+    let id_usuario_real = null;
+
+    const { data: medicoData, error: medicoError } = await supabase
+      .from("medico")
+      .select("id_usuario")
+      .eq("id_medico", payload.id_medico)
+      .single();
+
+    if (medicoError || !medicoData) {
+      console.warn("⚠️ No se pudo obtener id_usuario desde medico:", medicoError);
+    } else {
+      id_usuario_real = medicoData.id_usuario;
+    }
+
+    // 🧾 LOG APLICACION
+    const logApp = {
+      id_usuario: id_usuario_real,
+
+      modulo: 'glucosa',
+      entidad: 'registro_glucosa',
+      accion: 'CREATE',
+      id_registro: registro_glucosa.id_registro,
+
+      descripcion: 'Registro de glucosa creado',
+
+      endpoint: req.originalUrl,
+      metodo: req.method,
+      codigo_http: 201,
+
+      ip_origen: req.ip,
+      user_agent: req.headers['user-agent'],
+      fecha: new Date()
+    };
+
+    // 🧾 LOG DETALLE
+    const logDetalles = [
       {
-        id_registro: registro_glucosa.id_registro, // Corregido según tu esquema (id_registro)
+        tipo: 'VALOR',
+        campo: 'nivel_glucosa',
+        valor_anterior: null,
+        valor_entrante: payload.nivel_glucosa
+      }
+    ];
+
+    // 🚀 GUARDAR LOG SIN BLOQUEAR
+    guardarLogCompleto(logApp, logDetalles);
+
+    // ✅ RESPUESTA
+    return response(
+      res,
+      'success',
+      201,
+      "Registro de glucosa insertado correctamente",
+      {
+        id_registro: registro_glucosa.id_registro,
         registro: registro_glucosa
       }
     );
 
   } catch (error) {
-    console.error("Error en registrarGlucosaMedico: ", error.message);
-    
-    // 4️⃣ Manejo de error del servidor
+    console.error("💥 ERROR GENERAL:", {
+      message: error.message,
+      stack: error.stack
+    });
+    setImmediate(() => {
+      const logApp = {
+        id_usuario: id_usuario_real,
+
+        modulo: "glucosa",
+        entidad: "registro_glucosa",
+        accion: "CREATE",
+        id_registro: registro_glucosa.id_registro,
+
+        descripcion: `Error interno al intentar registrar glucosa: ${err.message}`,
+
+        endpoint: req.originalUrl,
+        metodo: req.method,
+        codigo_http: 500,
+
+        ip_origen: req.ip,
+        user_agent: req.headers["user-agent"],
+        fecha: new Date()
+      };
+
+      const logDetalles = [
+        {
+         
+        }
+      ];
+
+      guardarLogCompleto(logApp, logDetalles);
+    });
     return response(
-      res, 
-      'error', 
-      500, 
+      res,
+      'error',
+      500,
       "Error interno del servidor al registrar la medición de glucosa",
       error.message
     );
   }
 };
+
 const actualizarMedico = async (req, res) => {
   const { id_medico } = req.params;
   const { telefono, correo, departamento } = req.body;
   const carnetFile = req.file;
 
   try {
-    // 1️⃣ Obtener id_usuario del médico para poder actualizar la tabla de usuarios
+    // 🚫 Bloquear cambio de correo
+    if (correo !== undefined) {
+      console.warn("⚠️ Intento de modificar correo bloqueado");
+    }
+
+    // 1️⃣ Obtener id_usuario
     const { data: medico, error: medicoFetchError } = await supabase
       .from('medico')
       .select('id_usuario')
@@ -576,20 +791,44 @@ const actualizarMedico = async (req, res) => {
 
     const { id_usuario } = medico;
 
-    // 2️⃣ Preparar objetos de actualización dinámicos
+    // ================== 🧠 DATOS ANTES ==================
+
+    const { data: usuarioAntes } = await supabase
+      .from('usuario')
+      .select('*')
+      .eq('id_usuario', id_usuario)
+      .single();
+
+    const { data: medicoAntes } = await supabase
+      .from('medico')
+      .select('*')
+      .eq('id_medico', id_medico)
+      .single();
+
+    // ================== ✏️ UPDATES ==================
+
     const usuarioUpdates = {};
     if (telefono !== undefined) usuarioUpdates["teléfono"] = telefono;
-    if (correo !== undefined) usuarioUpdates.correo = correo;
 
     const medicoUpdates = {};
     if (departamento !== undefined) medicoUpdates.departamento = departamento;
 
-    // 3️⃣ Gestión del archivo (Carnet Profesional)
+    // ================== 📁 ARCHIVO ==================
+
     if (carnetFile) {
-      // Generamos un nombre único para evitar sobreescritura accidental
+      // 🔒 Validar tipo
+      if (!carnetFile.mimetype.startsWith("image/")) {
+        return response(res, 'error', 400, 'El archivo debe ser una imagen');
+      }
+
+      // 🔒 Validar tamaño (2MB)
+      if (carnetFile.size > 2 * 1024 * 1024) {
+        return response(res, 'error', 400, 'La imagen no debe superar 2MB');
+      }
+
       const extension = carnetFile.originalname.split('.').pop();
       const fileName = `carnet-${id_usuario}-${Date.now()}.${extension}`;
-      
+
       const { data: uploadData, error: uploadError } = await supabase
         .storage
         .from('Carnets_IMG')
@@ -600,7 +839,6 @@ const actualizarMedico = async (req, res) => {
 
       if (uploadError) throw uploadError;
 
-      // Obtener la URL pública del nuevo archivo
       const { data: urlData } = supabase
         .storage
         .from('Carnets_IMG')
@@ -609,47 +847,112 @@ const actualizarMedico = async (req, res) => {
       medicoUpdates.carnet_profesional = urlData.publicUrl;
     }
 
-    // 4️⃣ Ejecutar actualizaciones en la tabla 'usuario'
+    // 🚫 Validar que haya algo que actualizar
+    if (
+      Object.keys(usuarioUpdates).length === 0 &&
+      Object.keys(medicoUpdates).length === 0
+    ) {
+      return response(res, 'error', 400, 'No hay datos para actualizar');
+    }
+
+    // ================== 💾 UPDATE USUARIO ==================
+
     if (Object.keys(usuarioUpdates).length > 0) {
       const { error: errorUsuario } = await supabase
         .from('usuario')
         .update(usuarioUpdates)
         .eq('id_usuario', id_usuario);
-      
+
       if (errorUsuario) throw errorUsuario;
     }
 
-    // 5️⃣ Ejecutar actualizaciones en la tabla 'medico'
+    // ================== 💾 UPDATE MEDICO ==================
+
     if (Object.keys(medicoUpdates).length > 0) {
       const { error: errorMedico } = await supabase
         .from('medico')
         .update(medicoUpdates)
         .eq('id_medico', id_medico);
-      
+
       if (errorMedico) throw errorMedico;
     }
 
-    // 6️⃣ Respuesta exitosa estandarizada
-    return response(res, 'success', 200, 'Los datos del médico se actualizaron correctamente', {
+    // ================== 🔍 COMPARAR CAMBIOS ==================
+
+    const cambios = [];
+
+    if (telefono !== undefined && usuarioAntes.teléfono !== telefono) {
+      cambios.push({
+        tipo: "CAMBIO",
+        campo: "telefono",
+        valor_anterior: usuarioAntes.teléfono,
+        valor_entrante: telefono
+      });
+    }
+
+    if (departamento !== undefined && medicoAntes.departamento !== departamento) {
+      cambios.push({
+        tipo: "CAMBIO",
+        campo: "departamento",
+        valor_anterior: medicoAntes.departamento,
+        valor_entrante: departamento
+      });
+    }
+
+    if (medicoUpdates.carnet_profesional) {
+      cambios.push({
+        tipo: "CAMBIO",
+        campo: "carnet_profesional",
+        valor_anterior: medicoAntes.carnet_profesional,
+        valor_entrante: medicoUpdates.carnet_profesional
+      });
+    }
+
+    // ================== 🧾 LOG ==================
+
+    if (cambios.length > 0) {
+      const logApp = {
+        id_usuario,
+        modulo: "medico",
+        entidad: "perfil",
+        accion: "UPDATE",
+        id_registro: null,
+        descripcion: "Actualización de datos del médico",
+        endpoint: req.originalUrl,
+        metodo: req.method,
+        codigo_http: 200,
+        ip_origen: req.ip,
+        user_agent: req.headers["user-agent"],
+        fecha: new Date()
+      };
+
+      guardarLogCompleto(logApp, cambios);
+    } else {
+      console.log("ℹ️ No hubo cambios, no se genera log");
+    }
+
+    // ================== ✅ RESPUESTA ==================
+
+    return response(res, 'success', 200, 'Datos actualizados correctamente', {
       id_medico,
       actualizado_usuario: Object.keys(usuarioUpdates).length > 0,
       actualizado_perfil: Object.keys(medicoUpdates).length > 0,
+      cambios_realizados: cambios.length,
       nueva_url_carnet: medicoUpdates.carnet_profesional || null
     });
 
   } catch (error) {
-    console.error('Error en actualizarMedico:', error.message);
-    
+    console.error('💥 Error en actualizarMedico:', error);
+
     return response(
-      res, 
-      'error', 
-      500, 
-      'Ocurrió un error al intentar actualizar los datos del médico',
+      res,
+      'error',
+      500,
+      'Error al actualizar los datos del médico',
       error.message
     );
   }
 };
-
 // ✅ export correcto
 module.exports = {
   verMedicos,

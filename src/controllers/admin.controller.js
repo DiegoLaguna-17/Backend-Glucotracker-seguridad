@@ -1113,6 +1113,7 @@ const obtenerSolicitudesPendientes = async (req, res) => {
       .select('id_usuario, nombre_completo, correo, telefono:teléfono, fecha_registro')
       .eq('estado', false)
       .eq('rol', 'pendiente')
+      .eq('email_verificado',true)
       .order('fecha_registro', { ascending: false });
 
     if (error) {

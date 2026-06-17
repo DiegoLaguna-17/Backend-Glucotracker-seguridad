@@ -264,6 +264,17 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       return response(res, 'error', 403, 'El usuario no tiene un rol asignado en el sistema.');
     }
 
+    const {data:rolData, error: rolError}=await supabase
+      .from('roles')
+      .select('activo')
+      .eq('id_rol',usuarioRolData.id_rol);
+
+    if(rolError) throw rolError;
+
+    if (!rolData[0].activo) {
+      return response(res, 'error', 403, 'El rol se encuentra desactivado');
+    }
+
     // Cortamos el flujo INMEDIATAMENTE si el rol está marcado como inactivo o expirado
     if (usuarioRolData.activo === false) {
       console.log(`[LOGIN RECHAZADO] Rol inactivo/expirado para el usuario: ${correo}`);

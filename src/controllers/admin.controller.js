@@ -1018,6 +1018,7 @@ const obtenerRolesPermisos = async (req, res) => {
       .select(`
         id_rol,
         nombre_rol,
+        activo,
         rol_permiso (
           id_permiso,
           activo
@@ -1047,6 +1048,7 @@ const obtenerRolesPermisos = async (req, res) => {
       return {
         id_rol: rol.id_rol,
         nombre_rol: rol.nombre_rol,
+        activo: rol.activo,
         permisos: matrizPermisos
       };
     });
@@ -1120,7 +1122,7 @@ const cambiarEstadoRol = async (req, res) => {
     if (errBuscar || !rol) {
       return response(res, 'error', 404, 'Rol no encontrado', null);
     }
-
+    
     // 2. Alternar el valor de activo (toggle)
     const nuevoEstado = !rol.activo;
 

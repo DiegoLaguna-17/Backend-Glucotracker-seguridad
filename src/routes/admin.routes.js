@@ -36,7 +36,7 @@ router.put('/actualizarMatriz', verificarToken, getPermisos,verificarPermiso('ED
 
 router.post('/roles',insertarRoles);
 router.get('/roles/obtener',obtenerRoles);
-router.patch('/roles/:id_rol/estado', cambiarEstadoRol);
+router.patch('/roles/:id_rol/estado', verificarToken, getPermisos,verificarPermiso('EDITAR_ADMIN'),cambiarEstadoRol);
 router.get('/solicitudes-pendientes',verificarToken,getPermisos,verificarPermiso('ACEPTAR_SOLICITUD'),auditoriaAdmin,  obtenerSolicitudesPendientes);
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });

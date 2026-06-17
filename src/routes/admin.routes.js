@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { pacientesActivos, /*pacientesSolicitantes, activarPaciente,*/ medicosActivos, /*medicosSolicitantes, activarMedico,*/
     perfilAdmin, agregarAdmin, obtenerAdmins,/*actualizarPermisosAdmins,*/obtenerRoles,insertarRoles,/*actualizarPermisosPacientes,*/
-obtenerRolesPermisos,actualizarMatrizRoles,obtenerSolicitudesPendientes,activarCuenta,suspenderUsuario,reactivarUsuario, 
+obtenerRolesPermisos,actualizarMatrizRoles,cambiarEstadoRol,obtenerSolicitudesPendientes,activarCuenta,suspenderUsuario,reactivarUsuario, 
 pacientesCompletos,
 medicosCompletos, obtenerLogsAplicacion, obtenerLogsSeguridad, obtenerRolesTipo} = require('../controllers/admin.controller');
 const auditoriaAdmin = require("../middlewares/auditoria.admin"); 
@@ -36,6 +36,7 @@ router.put('/actualizarMatriz', verificarToken, getPermisos,verificarPermiso('ED
 
 router.post('/roles',insertarRoles);
 router.get('/roles/obtener',obtenerRoles);
+router.patch('/roles/:id_rol/estado', cambiarEstadoRol);
 router.get('/solicitudes-pendientes',verificarToken,getPermisos,verificarPermiso('ACEPTAR_SOLICITUD'),auditoriaAdmin,  obtenerSolicitudesPendientes);
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });

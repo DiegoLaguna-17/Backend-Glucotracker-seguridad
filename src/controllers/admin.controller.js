@@ -884,6 +884,7 @@ const obtenerRoles = async (req, res) => {
     const { data: roles, error } = await supabase
       .from("roles")
       .select("*")
+      .eq('activo', true)
       .neq('nombre_rol','administrador')
       .neq('nombre_rol','pendiente');
 
@@ -999,6 +1000,9 @@ const actualizarPermisosPacientes = async (req, res) => {
     return res.status(500).json({ error: 'Error interno del servidor' });
   }
 };*/
+
+// FUNCIONIES PARA GESTIÓN DE LOS ROLES
+
 const obtenerRolesPermisos = async (req, res) => {
   try {
     // 1. Obtenemos primero el catálogo maestro de todos los permisos del sistema
@@ -1102,7 +1106,44 @@ const actualizarMatrizRoles = async (req, res) => {
   }
 };
 
+const cambiarEstadoRol = async (req, res) => {
+  try {
+    const { id_rol } = req.params;
 
+    // 1. Buscar el estado actual del rol
+    const { data: rol, error: errBuscar } = await supabase
+      .from('roles')
+      .select('id_rol, nombre_rol, activo')
+      .eq('id_rol', id_rol)
+      .single();
+
+    if (errBuscar || !rol) {
+      return response(res, 'error', 404, 'Rol no encontrado', null);
+    }
+
+    // 2. Alternar el valor de activo (toggle)
+    const nuevoEstado = !rol.activo;
+
+    const { error: errUpdate } = await supabase
+      .from('roles')
+      .update({ activo: nuevoEstado })
+      .eq('id_rol', id_rol);
+
+    if (errUpdate) throw errUpdate;
+
+    return response(
+      res,
+      'success',
+      200,
+      `Rol "${rol.nombre_rol}" ${nuevoEstado ? 'activado' : 'desactivado'} correctamente`,
+      { id_rol: rol.id_rol, activo: nuevoEstado }
+    );
+
+  } catch (error) {
+    console.error('Error en cambiarEstadoRol:', error);
+    return response(res, 'error', 500, 'Error interno del servidor', null);
+  }
+};
 
 
 
@@ -1611,5 +1652,5 @@ const obtenerRolesTipo = async (req, res) => {
 
 module.exports={medicosActivos,/*medicosSolicitantes,activarMedico,*/pacientesActivos, pacientesCompletos,/*pacientesSolicitantes,
   activarPaciente,*/perfilAdmin,agregarAdmin,obtenerAdmins, /*actualizarPermisosAdmins, */obtenerRoles,insertarRoles,
-   /*actualizarPermisosPacientes,*/obtenerRolesPermisos,actualizarMatrizRoles,obtenerSolicitudesPendientes,activarCuenta,
+   /*actualizarPermisosPacientes,*/obtenerRolesPermisos,actualizarMatrizRoles,cambiarEstadoRol,obtenerSolicitudesPendientes,activarCuenta,
    suspenderUsuario,reactivarUsuario,medicosCompletos, obtenerLogsAplicacion,obtenerLogsSeguridad,obtenerRolesTipo};

@@ -184,7 +184,6 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
         console.log(`[LOGIN RECHAZADO] Cuenta inactiva: ${correo}`);
       }
 
-      // 🔴 LOG: Intento de acceso a cuenta bloqueada/inactiva
       await guardarLogSeguridad({
         id_usuario: usuario.id_usuario,
         evento: 'LOGIN_FALLIDO',
@@ -412,7 +411,6 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
     // 2️⃣ Validar robustez de la contraseña
     const validacion = esContrasenaRobusta(contrasena);
     if (!validacion.valida) {
-      // 🔴 LOG: Fallo por política de contraseña
       await guardarLogSeguridad({
         id_usuario: id_usuario,
         evento: 'CAMBIO_CONTRASENA_FALLIDO',
@@ -544,7 +542,7 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
         id_usuario: usuario.id_usuario,
         evento: 'OTP_FALLIDO',
         descripcion: 'Código OTP incorrecto o expirado.',
-        email_intento: usuario.correo, // 👈 Se registra el correo correctamente
+        email_intento: usuario.correo, 
         ip_origen: req.ip,
         user_agent: req.headers['user-agent'],
         exito: false
@@ -806,6 +804,10 @@ const { loginAuth } = require('./src/controllers/auth.controller');
 const securityRoutes = require('./src/routes/security.routes');
 app.use("/api", pdfRoute);
 app.use("/api/seguridad", securityRoutes);
+
+const usuarioRoutes=require('./src/routes/usuarios.routes');
+app.use("/api/usuarios",usuarioRoutes);
+
 
 // Manejador de rutas no encontradas (404) con headers de seguridad
 app.use((req, res) => {

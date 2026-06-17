@@ -444,7 +444,6 @@ const registrarGlucosa = async (req, res) => {
       id_usuario_real = pacienteData.id_usuario;
     }
 
-    // ================= LOG ASINCRONO =================
     setImmediate(() => {
       const logApp = {
         id_usuario: id_usuario_real,
@@ -452,7 +451,7 @@ const registrarGlucosa = async (req, res) => {
         modulo: "glucosa",
         entidad: "registro_glucosa",
         accion: "CREATE",
-        id_registro: registro_glucosa.id_registro, // ✅ consistente
+        id_registro: registro_glucosa.id_registro,
 
         descripcion: "Registro de glucosa creado",
 
@@ -571,7 +570,6 @@ const actualizarPaciente = async (req, res) => {
 
     const id_paciente = pacienteData.id_paciente;
 
-    // ================== 🧠 DATOS ANTES ==================
     const { data: usuarioAntes } = await supabase
       .from("usuario")
       .select("*")
@@ -584,7 +582,6 @@ const actualizarPaciente = async (req, res) => {
       .eq("id_usuario", id_usuario)
       .single();
 
-    // ================== ✏️ UPDATE ==================
 
     const { data: usuarioActualizado, error: errorUsuario } = await supabase
       .from("usuario")
@@ -612,7 +609,6 @@ const actualizarPaciente = async (req, res) => {
 
     if (errorPaciente) throw errorPaciente;
 
-    // ================== 🤰 EMBARAZO ==================
 
     if (embarazo === true && semanas_embarazo > 0) {
       const { error } = await supabase.from("seguimiento_embarazo").insert({
@@ -641,11 +637,8 @@ const actualizarPaciente = async (req, res) => {
       }
     }
 
-    // ================== 🔍 COMPARAR CAMBIOS ==================
 
     const cambios = [];
-
-    
 
     if (usuarioAntes.teléfono !== telefono) {
       cambios.push({
@@ -692,7 +685,6 @@ const actualizarPaciente = async (req, res) => {
       });
     }
 
-    // ================== 🧾 LOG ==================
 
     if (cambios.length > 0) {
       const logApp = {
